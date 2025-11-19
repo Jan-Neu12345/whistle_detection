@@ -181,7 +181,7 @@ class AudioDataset(Dataset):
         """
         return self.database[filename][0]["whistleLabels"]
 
-    def get_label(self, filename: str, start: int) -> bool:
+    def get_label(self, filename: str, start: int) -> torch.Tensor:
         """
         Get the label for a chunk of audio.
 
@@ -200,8 +200,8 @@ class AudioDataset(Dataset):
                 or label["start"] > end
                 and label["end"] > end
             ):
-                return True
-        return False
+                return torch.Tensor([1., 0.])
+        return torch.Tensor([0., 1.])
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, bool]:
         """
