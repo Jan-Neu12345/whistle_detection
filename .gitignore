@@ -2,7 +2,7 @@ data/
 processed/
 /wandb
 /checkpoints
-
+conf_*
 .DS_Store
 
 __pycache__

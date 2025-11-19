@@ -181,7 +181,7 @@ class AudioDataset(Dataset):
         """
         return self.database[filename][0]["whistleLabels"]
 
-    def get_label(self, filename: str, start: int) -> bool:
+    def get_label(self, filename: str, start: int) -> torch.Tensor:
         """
         Get the label for a chunk of audio.
 
@@ -193,15 +193,14 @@ class AudioDataset(Dataset):
         :rtype: bool
         """
         end = start + self.chunk_duration * self.target_sample_rate
-        for label in self.get_whistle_labels(filename):
-            if not (
-                label["start"] < start
-                and label["end"] < start
-                or label["start"] > end
-                and label["end"] > end
-            ):
-                return True
-        return False
+        for label in self.get_whistle_labels(filename): 
+            #if not (
+            #    label["start"] < start and label["end"] < start
+            #    or label["start"] > end and label["end"] > end
+            #):
+            if (start > label["start"] and start < label["end"] or end < label["end"] and end > label["start"]):
+                return torch.Tensor([1., 0.])   #no overlap
+        return torch.Tensor([0., 1.]) #overlap
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, bool]:
         """
@@ -212,6 +211,7 @@ class AudioDataset(Dataset):
         :return: Tuple of MEL-spectrogram and label (True if whistle is present)
         :rtype: Tuple[torch.Tensor, bool]
         """
+        #TODO Gitter einführen
         random.seed(idx)
         filename: os.PathLike = random.choice(list(self.audio.keys()))
         waveform: torch.Tensor = self.audio[filename]
