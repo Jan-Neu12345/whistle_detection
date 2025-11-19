@@ -302,13 +302,58 @@ def evaluate(model, dataloader, conf_threshold, device):
     all_false_negatives = 0
 
     
+    validate_bce = BCEWithLogitsLoss()
+    
+    results = []
+    all_true_positives = 0
+    all_false_positives = 0
+    all_true_negatives = 0
+    all_false_negatives = 0
+
+    
     for spectograms, labels in tqdm.tqdm(dataloader, desc="Validating"):
+        # print(labels.size())
         # print(labels.size())
         spectograms = Variable(spectograms.to(device), requires_grad=False)
         labels = Variable(labels.float().to(device), requires_grad=False)
 
         with torch.no_grad():
             outputs = torch.sigmoid(model(spectograms)).squeeze()
+#            validate_loss = validate_bce(outputs, labels)
+#        print(validate_loss)
+
+        # print(labels, outputs)
+        all_true_positives += (outputs[labels[:, 0] == 1][:, 0] > outputs[labels[:, 0] == 1][:, 1]).float().sum().item()
+        all_false_positives += (outputs[labels[:, 0] == 0][:, 0] > outputs[labels[:, 0] == 0][:, 1]).float().sum().item()
+        all_false_negatives += (outputs[labels[:, 0] == 1][:, 0] <= outputs[labels[:, 0] == 1][:, 1]).float().sum().item()
+        all_true_negatives += (outputs[labels[:, 0] == 0][:, 0] <= outputs[labels[:, 0] == 0][:, 1]).float().sum().item()
+        results.append(float(labels.eq(outputs >= conf_threshold).float().mean()))
+    
+    # heatmap = sns.heatmap(
+    #     np.array(
+    #         [
+    #             [all_true_negatives, all_false_positives],
+    #             [all_false_negatives, all_true_positives]
+    #         ]
+    #     ),
+    #     annot=True
+    # )
+    all_positives = all_true_positives+all_false_negatives
+    all_negatives = all_true_negatives+all_false_positives
+    plt.figure()
+    #TODO handling für all positives/negatives == 0
+    heatmap_normalized = sns.heatmap(
+        np.array(
+            [
+                [all_true_negatives/(all_negatives) if all_negatives > 0 else 0, all_false_positives/(all_negatives) if all_negatives > 0 else 0],
+                [all_false_negatives/(all_positives) if all_positives > 0 else 0, all_true_positives/(all_positives)  if all_positives > 0 else 0]
+            ]
+        ),
+        annot=True
+    )
+    # plt.show()
+
+    return results
 #            validate_loss = validate_bce(outputs, labels)
 #        print(validate_loss)
 
