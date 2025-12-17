@@ -139,13 +139,59 @@ class AudioDataset(Dataset):
         self.target_sample_rate = target_sample_rate
         self.chunk_duration = chunk_duration
         # dict of file name to tuple of waveform and sample rate
-        self.audio = {
-            filename: resample(
-                *torchaudio.load(os.path.join(self.folder, filename)),
-                target_sample_rate,
-            )
-            for filename in self.database.keys()
-        }
+        self.audio = {}
+        for filename in self.database.keys():
+            waveform, samplerate = torchaudio.load(os.path.join(self.folder, filename))
+            self.audio[filename] = (resample(waveform, samplerate, target_sample_rate), samplerate)
+
+        self.whistles = 0
+        tempchunks = []
+        old_sample_rates = []
+        templabels = []
+        whistle_startpos = []
+        
+        for audiofile in list(self.audio.keys()):
+            startpos = 0
+            while(startpos + self.target_sample_rate * self.chunk_duration < self.audio[audiofile][0].shape[1]):
+                mel = convert_waveform_to_spectogram(self.target_sample_rate, self.audio[audiofile][0][:, startpos : startpos + int(self.target_sample_rate * self.chunk_duration)])
+                tempchunks.append(mel)
+                templabels.append(self.get_label(audiofile, startpos, self.audio[audiofile][1]))
+                old_sample_rates.append(samplerate)
+                if torch.equal(templabels[-1], torch.Tensor([0., 1.])):
+                    whistle_startpos.append(startpos)
+                    print(f"whistlestartpos is {startpos}")
+                #print(f"chunk {self.audio[audiofile][0].shape}")
+
+                startpos += int(self.target_sample_rate * self.chunk_duration)
+                int(startpos)
+        if train_mode:
+            print(f"traindataset contains {self.whistles} whistles")
+        else:
+            print(f"testdataset contains {self.whistles} whistles")
+
+        # Oversampling
+        if train_mode:
+            oversampled_chunks = []
+            target_chunks = []
+            num_of_oversamples = int(len(tempchunks) / 2)
+            while(len(oversampled_chunks) < num_of_oversamples):
+                new_start_idx = random.randint(-5000,5000)
+                for current_start in whistle_startpos:
+                    for audiofile in list(self.audio.keys()):
+                        if torch.equal(self.get_label(audiofile , current_start + new_start_idx, self.audio[audiofile][1]),torch.Tensor([0., 1.])):
+                            oversampled_chunks.append(current_start + new_start_idx)
+                            break
+            for audiofile in list(self.audio.keys()):
+                for oversample_start_pos in oversampled_chunks:
+                    if (oversample_start_pos + self.target_sample_rate * self.chunk_duration < self.audio[audiofile][0].shape[1]):
+                        mel = convert_waveform_to_spectogram(self.target_sample_rate, self.audio[audiofile][0][:, oversample_start_pos : oversample_start_pos + int(self.target_sample_rate * self.chunk_duration)])
+                        tempchunks.append(mel)
+                        templabels.append(self.get_label(audiofile, oversample_start_pos, self.audio[audiofile][1]))
+            print(f"oversampled currently {len(oversampled_chunks)} chunks")
+            
+        self.tc = tempchunks
+        self.tl = templabels
+
 
     def load_database(
         self, database_path, train_mode, train_test_split
@@ -158,17 +204,22 @@ class AudioDataset(Dataset):
 
         if train_mode:
             files = shuffled_files[:split_index]
+            for audio_file in files:
+                print(f"trainmodus contains:  {audio_file['path']} ")
         else:
             files = shuffled_files[split_index:]
+            for audio_file in files:
+                print(f"testmodus contains:  {audio_file['path']}")
 
         return {audio_file["path"]: audio_file["channels"] for audio_file in files}
 
     def __len__(self) -> int:
-        total_samples = 0
-        for waveform in self.audio.values():
-            total_samples += waveform.shape[1]
-        duration = total_samples // self.target_sample_rate
-        return duration // self.chunk_duration
+        #total_samples = 0
+        #for waveform in self.audio.values():
+        #    total_samples += waveform.shape[1]
+        #duration = total_samples // self.target_sample_rate
+        #return duration // self.chunk_duration
+        return len(self.tl)
 
     def get_whistle_labels(self, filename: str) -> List[Dict[str, int]]:
         """
@@ -181,8 +232,7 @@ class AudioDataset(Dataset):
         """
         return self.database[filename][0]["whistleLabels"]
 
-    def get_label(self, filename: str, start: int) -> torch.Tensor:
-    def get_label(self, filename: str, start: int) -> torch.Tensor:
+    def get_label(self, filename: str, start: int, old_samplerate:int=None) -> torch.Tensor:
         """
         Get the label for a chunk of audio.
 
@@ -193,15 +243,24 @@ class AudioDataset(Dataset):
         :return: True if the chunk contains a whistle
         :rtype: bool
         """
+        labels_with_old_samplerate = self.get_whistle_labels(filename)
+        labels = []
+        #print(labels_with_old_samplerate)
+        if not old_samplerate == None:
+            for label in labels_with_old_samplerate:
+                labels.append({
+                    "start": label["start"] / old_samplerate * self.target_sample_rate, 
+                    "end": label["end"] / old_samplerate * self.target_sample_rate
+                })
+        #print(labels)
+
         end = start + self.chunk_duration * self.target_sample_rate
-        for label in self.get_whistle_labels(filename): 
-            #if not (
-            #    label["start"] < start and label["end"] < start
-            #    or label["start"] > end and label["end"] > end
-            #):
-            if (start > label["start"] and start < label["end"] or end < label["end"] and end > label["start"]):
-                return torch.Tensor([1., 0.])   #no overlap
-        return torch.Tensor([0., 1.]) #overlap
+        for label in labels: 
+            #if (start > label["start"] and start < label["end"] or end < label["end"] and end > label["start"]):
+            if not (end <= label["start"] or start >= label["end"]):
+                self.whistles += 1
+                return torch.Tensor([0., 1.])   # overlap
+        return torch.Tensor([1., 0.]) # no overlap
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, bool]:
         """
@@ -212,22 +271,16 @@ class AudioDataset(Dataset):
         :return: Tuple of MEL-spectrogram and label (True if whistle is present)
         :rtype: Tuple[torch.Tensor, bool]
         """
-        #TODO Gitter einführen
-        random.seed(idx)
-        filename: os.PathLike = random.choice(list(self.audio.keys()))
-        waveform: torch.Tensor = self.audio[filename]
-        start_pos: int = random.randint(
-            0, waveform.shape[1] - self.target_sample_rate * self.chunk_duration
-        )
-        chunk: torch.Tensor = waveform[
-            :, start_pos : start_pos + self.target_sample_rate * self.chunk_duration
-        ]
-        label: bool = self.get_label(filename, start_pos)
+        #random.seed(idx)
+        #filename: os.PathLike = random.choice(list(self.audio.keys()))
+        #waveform: torch.Tensor = self.audio[filename]
+        #start_pos: int = random.randint(0, waveform.shape[1] - self.target_sample_rate * self.chunk_duration)
+        #start_pos: int = idx
+        #chunk: torch.Tensor = waveform[:, start_pos : start_pos + self.target_sample_rate * self.chunk_duration]
+        #label: bool = self.get_label(filename, start_pos)
 
-        mel_spectrogram: torch.Tensor = convert_waveform_to_spectogram(
-            self.target_sample_rate, chunk
-        )
-        return mel_spectrogram, label
+        #mel_spectrogram: torch.Tensor = convert_waveform_to_spectogram(self.target_sample_rate, chunk)
+        return self.tc[idx], self.tl[idx]
 
 
 def convert_waveform_to_spectogram(

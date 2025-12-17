@@ -6,3 +6,5 @@ conf_*
 .DS_Store
 
 __pycache__
+loss_metriken.png
+python3

@@ -10,7 +10,7 @@ import numpy as np
 #from lion_pytorch import Lion
 from dataset import AudioDataset
 from torch.autograd import Variable
-from torch.nn import BCEWithLogitsLoss
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
 from torch.utils.data import DataLoader
 from utils import print_environment_info, provide_determinism
 
@@ -83,7 +83,7 @@ def run():
     )
     parser.add_argument(
         "--chunk_duration",
-        type=int,
+        type=float,
         default=1,
         help="Duration of the chunks in seconds",
     )
@@ -133,7 +133,7 @@ def run():
     )
     train_dataloader = DataLoader(
         train_dataset,
-        batch_size=args.batch_size,
+        batch_size=1024,
         shuffle=False,
         num_workers=args.n_cpu,
         worker_init_fn=worker_seed_set,
@@ -149,7 +149,7 @@ def run():
     )
     validation_dataloader = DataLoader(
         validation_dataset,
-        batch_size=args.batch_size,
+        batch_size=1024,
         shuffle=False,
         num_workers=args.n_cpu,
         worker_init_fn=worker_seed_set,
@@ -161,14 +161,19 @@ def run():
         num_true += label[:, 1].int().sum().item()
         total += len(label)
 
+    # print(num_true)
+
     weight_true = total / (num_true * 2)
     weight_false = total / ((total - num_true) * 2)
 
     # print(weight_true)
     # print(weight_false)
 
-    # bce = BCEWithLogitsLoss(weight=torch.Tensor([weight_false, weight_true]).to(device))
-    bce = BCEWithLogitsLoss()
+    weight = torch.Tensor([weight_false, weight_true]).to(device)
+
+    bce = BCEWithLogitsLoss(weight=weight)
+    #bce = BCEWithLogitsLoss(weight=torch.Tensor([0.000000001, 100.0]).to(device))
+    # bce = BCEWithLogitsLoss()
 
     model = get_model(device)
 
@@ -183,11 +188,24 @@ def run():
         lr=args.learning_rate,
     )
 
+    all_epochs_train_loss = []
+    all_epochs_validation_loss = []
+
     # skip epoch zero, because then the calculations for when to evaluate/checkpoint makes more intuitive sense
     # e.g. when you stop after 30 epochs and evaluate every 10 epochs then the evaluations happen after: 10,20,30
     # instead of: 0, 10, 20
     for epoch in range(1, args.epochs + 1):
         model.train()
+
+        results = []
+        all_true_positives = 0
+        all_false_positives = 0
+        all_true_negatives = 0
+        all_false_negatives = 0
+
+
+
+        train_loss = 0
 
         #for batch_i, (spectograms, labels) in enumerate(
         for spectograms, labels in tqdm.tqdm(train_dataloader, desc=f"Training Epoch {epoch}"
@@ -198,7 +216,7 @@ def run():
             outputs = model(spectograms)
             outputs = torch.squeeze(outputs)
             # print(outputs.size())
-            print(labels)
+            # print(labels)
 
             # # get two tensors with ones at each classes instance
             # ones_at_true = label.int()
@@ -208,13 +226,21 @@ def run():
             # ones_at_false *= weight_false
             # weights = ones_at_true + ones_at_false
             
-
             loss = bce(outputs, labels)
             loss.backward()
-            #print(loss)
+            train_loss += loss.to(device="cpu").item()
+            # print(train_loss)
 
             if not args.disable_wandb:
                 wandb.log({"train_loss": loss.item()})
+
+            real_whistle = labels[:, 0] == 0
+            not_real_whistle = ~real_whistle
+
+            all_true_negatives += (outputs[not_real_whistle][:, 0] > outputs[not_real_whistle][:, 1]).float().sum().item()
+            all_false_positives += (outputs[not_real_whistle][:, 0] <= outputs[not_real_whistle][:, 1]).float().sum().item()
+            all_false_negatives += (outputs[real_whistle][:, 0] > outputs[real_whistle][:, 1]).float().sum().item()
+            all_true_positives += (outputs[real_whistle][:, 0] <= outputs[real_whistle][:, 1]).float().sum().item()
 
             ###############
             # Run optimizer
@@ -224,6 +250,8 @@ def run():
             optimizer.step()
             optimizer.zero_grad()
 
+        all_epochs_train_loss.append(train_loss)
+            
         # #############
         # Save progress
         # #############
@@ -236,37 +264,52 @@ def run():
             print(f"---- Saving checkpoint to: '{checkpoint_path}' ----")
             torch.save(model.state_dict(), checkpoint_path)
         
-        print(labels)
-        print(outputs)
+        # print(labels)
+        # print(outputs)
         # train conf matr
         
-        results = []
-        all_true_positives = 0
-        all_false_positives = 0
-        all_true_negatives = 0
-        all_false_negatives = 0
-
-        all_true_positives += (outputs[labels[:, 0] == 1][:, 0] > outputs[labels[:, 0] == 1][:, 1]).float().sum().item()
-        all_false_positives += (outputs[labels[:, 0] == 0][:, 0] > outputs[labels[:, 0] == 0][:, 1]).float().sum().item()
-        all_false_negatives += (outputs[labels[:, 0] == 1][:, 0] <= outputs[labels[:, 0] == 1][:, 1]).float().sum().item()
-        all_true_negatives += (outputs[labels[:, 0] == 0][:, 0] <= outputs[labels[:, 0] == 0][:, 1]).float().sum().item()
-        results.append(float(labels.eq(outputs >= args.conf_threshold).float().mean()))
-
         all_positives = all_true_positives+all_false_negatives
         all_negatives = all_true_negatives+all_false_positives
+
+        plt.figure()
+        heatmap_normalized = sns.heatmap(
+        np.array(
+            [
+                [all_true_negatives / all_negatives, all_false_positives / all_negatives],
+                [all_false_negatives / all_positives, all_true_positives / all_positives]
+            ]
+        ),
+        annot=True
+        )
+        plt.savefig(f"conf_train_matr/conf_matrix_epoch{epoch}.png")
+        plt.close()
+
+        
+        results.append(float(labels.eq(outputs >= args.conf_threshold).float().mean()))
+
         plt.figure()
 
         #TODO handling für all positives/negatives == 0
-        heatmap_normalized = sns.heatmap(
-            np.array(
-                [
-                    [all_true_negatives/(all_negatives) if all_negatives > 0 else 0, all_false_positives/(all_negatives) if all_negatives > 0 else 0],
-                    [all_false_negatives/(all_positives) if all_positives > 0 else 0, all_true_positives/(all_positives)  if all_positives > 0 else 0]
-                ]
-            ),
-            annot=True
-        )
-        plt.savefig(f"conf_train_matr/conf_matrix_epoch{epoch}.png")
+        # heatmap_normalized = sns.heatmap(
+        #     np.array(
+        #         [
+        #             [all_true_negatives/(all_negatives) if all_negatives > 0 else 0, all_false_positives/(all_negatives) if all_negatives > 0 else 0],
+        #             [all_false_negatives/(all_positives) if all_positives > 0 else 0, all_true_positives/(all_positives)  if all_positives > 0 else 0]
+        #         ]
+        #     ),
+        #     annot=True
+        # )
+        #heatmap_normalized = sns.heatmap(
+        #    np.array(
+        #        [
+        #            [all_true_negatives, all_false_positives],
+        #            [all_false_negatives, all_true_positives]
+        #        ]
+        #    ),
+        #    annot=True
+        #)
+        #plt.savefig(f"conf_train_matr/conf_matrix_epoch{epoch}.png")
+        # plt.close()
 
         
 
@@ -279,21 +322,34 @@ def run():
 
         if epoch % args.evaluation_interval == 0:
             # Evaluate the model on the validation set
-            metrics_output = {
-                "mean": evaluate(
-                    model, validation_dataloader, args.conf_threshold, device
-                )
-            }
+            output, validation_loss = evaluate(
+                model, validation_dataloader, args.conf_threshold, device, weight
+            )
+            # metrics_output = {
+            #     "mean": output
+            # }
+            all_epochs_validation_loss.append(validation_loss)
             plt.savefig(f"conf_matr/conf_matrix_epoch{epoch}.png")
+            plt.close()
 
-            if not args.disable_wandb:
-                wandb.log(metrics_output)
-            print(f"---- Evaluation metrics: {metrics_output} ----")
+            # if not args.disable_wandb:
+            #     wandb.log(metrics_output)
+            # print(f"---- Evaluation metrics: {metrics_output} ----")
+    
+    plt.figure()
+    plt.plot(list(range(1, args.epochs + 1)), all_epochs_train_loss, color="blue", label="train loss")
+    plt.plot(list(range(1, args.epochs + 1)), all_epochs_validation_loss, color="red", label="validation loss")
+    plt.legend()
+    plt.title("Loss Metriken")
+    plt.xlabel("epoche")
+    plt.ylabel("loss")
+    plt.savefig("./loss_metriken.png")
+    plt.close()
 
 
-def evaluate(model, dataloader, conf_threshold, device):
+def evaluate(model, dataloader, conf_threshold, device, weight):
     model.eval()
-    validate_bce = BCEWithLogitsLoss()
+    validate_bce = BCEWithLogitsLoss(weight=weight)
     
     results = []
     all_true_positives = 0
@@ -302,44 +358,29 @@ def evaluate(model, dataloader, conf_threshold, device):
     all_false_negatives = 0
 
     
-    validate_bce = BCEWithLogitsLoss()
-    
-    results = []
-    all_true_positives = 0
-    all_false_positives = 0
-    all_true_negatives = 0
-    all_false_negatives = 0
+    validation_loss = 0
 
-    
     for spectograms, labels in tqdm.tqdm(dataloader, desc="Validating"):
-        # print(labels.size())
-        # print(labels.size())
         spectograms = Variable(spectograms.to(device), requires_grad=False)
         labels = Variable(labels.float().to(device), requires_grad=False)
 
         with torch.no_grad():
-            outputs = torch.sigmoid(model(spectograms)).squeeze()
-#            validate_loss = validate_bce(outputs, labels)
-#        print(validate_loss)
+            outputs = model(spectograms).squeeze()
+            validation_loss += validate_bce(outputs, labels).to(device="cpu").item()
 
-        # print(labels, outputs)
-        all_true_positives += (outputs[labels[:, 0] == 1][:, 0] > outputs[labels[:, 0] == 1][:, 1]).float().sum().item()
-        all_false_positives += (outputs[labels[:, 0] == 0][:, 0] > outputs[labels[:, 0] == 0][:, 1]).float().sum().item()
-        all_false_negatives += (outputs[labels[:, 0] == 1][:, 0] <= outputs[labels[:, 0] == 1][:, 1]).float().sum().item()
-        all_true_negatives += (outputs[labels[:, 0] == 0][:, 0] <= outputs[labels[:, 0] == 0][:, 1]).float().sum().item()
-        results.append(float(labels.eq(outputs >= conf_threshold).float().mean()))
-    
-    # heatmap = sns.heatmap(
-    #     np.array(
-    #         [
-    #             [all_true_negatives, all_false_positives],
-    #             [all_false_negatives, all_true_positives]
-    #         ]
-    #     ),
-    #     annot=True
-    # )
+
+
+        real_whistle = labels[:, 0] == 0
+        not_real_whistle = ~real_whistle
+
+        all_true_negatives += (outputs[not_real_whistle][:, 0] > outputs[not_real_whistle][:, 1]).float().sum().item()
+        all_false_positives += (outputs[not_real_whistle][:, 0] <= outputs[not_real_whistle][:, 1]).float().sum().item()
+        all_false_negatives += (outputs[real_whistle][:, 0] > outputs[real_whistle][:, 1]).float().sum().item()
+        all_true_positives += (outputs[real_whistle][:, 0] <= outputs[real_whistle][:, 1]).float().sum().item()
+
     all_positives = all_true_positives+all_false_negatives
     all_negatives = all_true_negatives+all_false_positives
+
     plt.figure()
     #TODO handling für all positives/negatives == 0
     heatmap_normalized = sns.heatmap(
@@ -351,44 +392,9 @@ def evaluate(model, dataloader, conf_threshold, device):
         ),
         annot=True
     )
-    # plt.show()
 
-    return results
-#            validate_loss = validate_bce(outputs, labels)
-#        print(validate_loss)
+    return results, validation_loss
 
-        # print(labels, outputs)
-        all_true_positives += (outputs[labels[:, 0] == 1][:, 0] > outputs[labels[:, 0] == 1][:, 1]).float().sum().item()
-        all_false_positives += (outputs[labels[:, 0] == 0][:, 0] > outputs[labels[:, 0] == 0][:, 1]).float().sum().item()
-        all_false_negatives += (outputs[labels[:, 0] == 1][:, 0] <= outputs[labels[:, 0] == 1][:, 1]).float().sum().item()
-        all_true_negatives += (outputs[labels[:, 0] == 0][:, 0] <= outputs[labels[:, 0] == 0][:, 1]).float().sum().item()
-        results.append(float(labels.eq(outputs >= conf_threshold).float().mean()))
-    
-    # heatmap = sns.heatmap(
-    #     np.array(
-    #         [
-    #             [all_true_negatives, all_false_positives],
-    #             [all_false_negatives, all_true_positives]
-    #         ]
-    #     ),
-    #     annot=True
-    # )
-    all_positives = all_true_positives+all_false_negatives
-    all_negatives = all_true_negatives+all_false_positives
-    plt.figure()
-    #TODO handling für all positives/negatives == 0
-    heatmap_normalized = sns.heatmap(
-        np.array(
-            [
-                [all_true_negatives/(all_negatives) if all_negatives > 0 else 0, all_false_positives/(all_negatives) if all_negatives > 0 else 0],
-                [all_false_negatives/(all_positives) if all_positives > 0 else 0, all_true_positives/(all_positives)  if all_positives > 0 else 0]
-            ]
-        ),
-        annot=True
-    )
-    # plt.show()
-
-    return results
 
 
 if __name__ == "__main__":
