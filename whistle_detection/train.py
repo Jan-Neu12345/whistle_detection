@@ -179,14 +179,13 @@ def run():
 
     params = [p for p in model.parameters() if p.requires_grad]
 
-    #optimizer = optim.Adam(
-    #    params,
-    #    lr=args.learning_rate,
-    #)
-    optimizer = optim.Adam(
+    optimizer = optim.NAdam(
         params,
-        lr=args.learning_rate,
+        lr=args.learning_rate, 
+        weight_decay=0.01
     )
+
+    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
 
     all_epochs_train_loss = []
     all_epochs_validation_loss = []
@@ -246,11 +245,11 @@ def run():
             # Run optimizer
             ###############
 
-            #TODO Optimizer überdenken / Kein Optimizer = mehr TP, aber keine Verbesserung nach Epoche 1 wtf?!?
             optimizer.step()
             optimizer.zero_grad()
 
         all_epochs_train_loss.append(train_loss)
+        scheduler.step()
             
         # #############
         # Save progress
@@ -337,12 +336,17 @@ def run():
             # print(f"---- Evaluation metrics: {metrics_output} ----")
     
     plt.figure()
-    plt.plot(list(range(1, args.epochs + 1)), all_epochs_train_loss, color="blue", label="train loss")
-    plt.plot(list(range(1, args.epochs + 1)), all_epochs_validation_loss, color="red", label="validation loss")
-    plt.legend()
+    fig, ax1 = plt.subplots()
+    ax1.plot(list(range(1, args.epochs + 1)), all_epochs_train_loss, color="blue", label="train loss")
+    ax1.set_ylabel("training loss")
+    ax2 = ax1.twinx()
+    ax2.plot(list(range(1, args.epochs + 1)), all_epochs_validation_loss, color="red", label="validation loss")
+    ax2.set_yscale("log")
+    ax2.set_ylabel("validation loss")
+    fig.legend()
     plt.title("Loss Metriken")
     plt.xlabel("epoche")
-    plt.ylabel("loss")
+    #plt.ylabel("loss")
     plt.savefig("./loss_metriken.png")
     plt.close()
 

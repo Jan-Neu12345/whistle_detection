@@ -159,7 +159,7 @@ class AudioDataset(Dataset):
                 old_sample_rates.append(samplerate)
                 if torch.equal(templabels[-1], torch.Tensor([0., 1.])):
                     whistle_startpos.append(startpos)
-                    print(f"whistlestartpos is {startpos}")
+                    #print(f"whistlestartpos is {startpos}")
                 #print(f"chunk {self.audio[audiofile][0].shape}")
 
                 startpos += int(self.target_sample_rate * self.chunk_duration)
@@ -170,7 +170,8 @@ class AudioDataset(Dataset):
             print(f"testdataset contains {self.whistles} whistles")
 
         # Oversampling
-        if train_mode:
+        useOversampling = True
+        if train_mode and useOversampling:
             oversampled_chunks = []
             target_chunks = []
             num_of_oversamples = int(len(tempchunks) / 2)

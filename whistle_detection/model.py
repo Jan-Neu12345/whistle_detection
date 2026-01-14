@@ -11,6 +11,7 @@ def get_model(device): # -> models.resnet.ResNet:
     
     #model = models.mobilenet_v3_small(num_classes=2)
     model = models.efficientnet_b0(weights="DEFAULT")
+    #model.classifier[0] = nn.Dropout(p=0.2) #p=0.2 is default
     in_features = model.classifier[1].in_features
     model.classifier[1] = nn.Linear(in_features, 2)
     return model.to(device)
