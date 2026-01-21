@@ -9,9 +9,10 @@ from torchvision import models
 import dataset
 import model as pymod
 import numpy as np
+import matplotlib.pyplot as plt
 
 CHUNK = 1024
-FORMAT = pyaudio.paInt16
+FORMAT = pyaudio.paFloat32
 CHANNELS = 1
 SAMPLE_RATE = 44100
 CHUNK_LENGTH_SEK = 1
@@ -40,27 +41,47 @@ model.eval()
 while True: 
     data = stream.read(CHUNK, exception_on_overflow=False)
     #frames.append(data)
-    audio_np = np.frombuffer(data, dtype=np.int16)
+    audio_np = np.frombuffer(data, dtype=np.float32)
     
 
     # int16 → float32 in [-1.0, 1.0]
-    audio_np = audio_np.astype(np.float32) / 32768.0
-    
+    #audio_np = audio_np.astype(np.float32) / 32768.0
+    #print(type(audio_np))
+    #print(audio_np.dtype)
+    #print("--------------------")
+    #print(np.isnan(audio_np).sum())
+    #print(np.max(audio_np), np.min(audio_np), np.mean(audio_np), np.std(audio_np))
+    #plt.plot(audio_np)
+    #plt.show()
 
     # torch tensor
     audio_tensor = torch.from_numpy(audio_np)
 
     # torchaudio expects (channels, samples)
-    #audio_tensor = audio_tensor.unsqueeze(0)
+    audio_tensor = audio_tensor.unsqueeze(0)
     #print(audio_tensor.shape)
-    mel = dataset.convert_waveform_to_spectogram(SAMPLE_RATE, audio_tensor)
+
+    resample_audio_tensor = dataset.resample(audio_tensor, sample_rate=SAMPLE_RATE, target_sample_rate=10_000)
+
+    
+
+    mel = dataset.convert_waveform_to_spectogram(SAMPLE_RATE, resample_audio_tensor)
+    mel[mel.isinf()] = 0
+    #print(mel.isnan().sum())
+    #print(mel.isinf().sum())
+    #plt.plot(mel[1])
+    #plt.show()
+
     #print(mel.shape)
     mel = mel.unsqueeze(0)
     #print(torch.isnan(mel).sum(), torch.isinf(mel).sum())
     #print(mel)
+    
     with torch.no_grad():
             output = model(mel).squeeze()
             print(output)
+            if output[0] >= output[1]:
+                print(output+ "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 
     """
     if time.time() - start_time > CHUNK_LENGTH_SEK:

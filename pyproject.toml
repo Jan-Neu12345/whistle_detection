@@ -17,6 +17,7 @@ matplotlib = "^3.10.7"
 seaborn = "^0.13.2"
 sounddevice = "^0.5.3"
 soundfile = "^0.13.1"
+pyaudio = "^0.2.14"
 
 [tool.poetry.group.dev.dependencies]
 wandb = "^0.13.6"

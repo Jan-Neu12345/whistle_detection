@@ -153,7 +153,13 @@ class AudioDataset(Dataset):
         for audiofile in list(self.audio.keys()):
             startpos = 0
             while(startpos + self.target_sample_rate * self.chunk_duration < self.audio[audiofile][0].shape[1]):
+                c = self.audio[audiofile][0][:, startpos : startpos + int(self.target_sample_rate * self.chunk_duration)]
+                #print(c.max(), c.min(), c.mean(), c.std())
                 mel = convert_waveform_to_spectogram(self.target_sample_rate, self.audio[audiofile][0][:, startpos : startpos + int(self.target_sample_rate * self.chunk_duration)])
+                #print(mel.max(), mel.min(), mel.mean(), mel.std())
+                #print(mel.isnan().sum(), mel.isinf().sum())
+                #input()
+                
                 tempchunks.append(mel)
                 templabels.append(self.get_label(audiofile, startpos, self.audio[audiofile][1]))
                 old_sample_rates.append(samplerate)
@@ -170,7 +176,7 @@ class AudioDataset(Dataset):
             print(f"testdataset contains {self.whistles} whistles")
 
         # Oversampling
-        useOversampling = True
+        useOversampling = False
         if train_mode and useOversampling:
             oversampled_chunks = []
             target_chunks = []

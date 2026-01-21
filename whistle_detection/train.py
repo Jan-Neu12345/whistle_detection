@@ -370,6 +370,9 @@ def evaluate(model, dataloader, conf_threshold, device, weight):
 
         with torch.no_grad():
             outputs = model(spectograms).squeeze()
+            print(outputs)
+            #if outputs[0] >= outputs[1]:
+            #    print(outputs+ "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
             validation_loss += validate_bce(outputs, labels).to(device="cpu").item()
 
 
